@@ -37,6 +37,7 @@
 #include <pthread/private.h>
 #if !TARGET_OS_DRIVERKIT
 #include <dlfcn.h>
+#include <os/variant_private.h>
 #endif
 #include <fcntl.h>
 #include <errno.h>
@@ -46,14 +47,11 @@
 
 #include <mach-o/dyld_priv.h>
 
-#ifdef DARLING
-extern int _dyld_func_lookup(const char* name, void** address);
-#endif
-
 // system library initialisers
 extern void mach_init(void);			// from libsystem_kernel.dylib
 extern void __libplatform_init(void *future_use, const char *envp[], const char *apple[], const struct ProgramVars *vars);
 extern void __pthread_init(const struct _libpthread_functions *libpthread_funcs, const char *envp[], const char *apple[], const struct ProgramVars *vars);	// from libsystem_pthread.dylib
+extern void __pthread_late_init(const char *envp[], const char *apple[], const struct ProgramVars *vars);	// from libsystem_pthread.dylib
 extern void __malloc_init(const char *apple[]); // from libsystem_malloc.dylib
 extern void __keymgr_initializer(void);		// from libkeymgr.dylib
 extern void _dyld_initializer(void);		// from libdyld.dylib
@@ -88,9 +86,6 @@ extern void _malloc_fork_parent(void);
 extern void _malloc_fork_child(void);
 
 extern void _mach_fork_child(void);
-#ifdef DARLING
-extern void _mach_fork_parent(void);
-#endif
 extern void _notify_fork_child(void);
 extern void _dyld_atfork_prepare(void);
 extern void _dyld_atfork_parent(void);
@@ -114,7 +109,7 @@ void libSystem_atfork_prepare(void);
 void libSystem_atfork_parent(void);
 void libSystem_atfork_child(void);
 
-#if CURRENT_VARIANT_asan
+#if SUPPORT_ASAN
 const char *__asan_default_options(void);
 #endif
 
@@ -176,7 +171,7 @@ libSystem_initializer(int argc,
 		      const struct ProgramVars* vars)
 {
 	static const struct _libkernel_functions libkernel_funcs = {
-		.version = 3,
+		.version = 4,
 		// V1 functions
 #if !TARGET_OS_DRIVERKIT
 		.dlsym = dlsym,
@@ -190,9 +185,6 @@ libSystem_initializer(int argc,
 		.pthread_clear_qos_tsd = _pthread_clear_qos_tsd,
 		// V4 functions
 		.pthread_current_stack_contains_np = pthread_current_stack_contains_np,
-#ifdef DARLING
-		.dyld_func_lookup = _dyld_func_lookup,
-#endif
 	};
 
 	static const struct _libpthread_functions libpthread_funcs = {
@@ -212,14 +204,6 @@ libSystem_initializer(int argc,
 #endif
 	};
 	
-	static const struct _malloc_functions malloc_funcs = {
-		.version = 1,
-#if !TARGET_OS_DRIVERKIT
-		.dlopen = dlopen,
-		.dlsym = dlsym,
-#endif
-	};
-	
 	_libSystem_ktrace0(ARIADNE_LIFECYCLE_libsystem_init | DBG_FUNC_START);
 
 	__libkernel_init(&libkernel_funcs, envp, apple, vars);
@@ -235,6 +219,7 @@ libSystem_initializer(int argc,
 	_libSystem_ktrace_init_func(LIBC);
 
 	// TODO: Move __malloc_init before __libc_init after breaking malloc's upward link to Libc
+	// Note that __malloc_init() will also initialize ASAN when it is present
 	__malloc_init(apple);
 	_libSystem_ktrace_init_func(MALLOC);
 
@@ -244,11 +229,12 @@ libSystem_initializer(int argc,
 	_libSystem_ktrace_init_func(KEYMGR);
 #endif
 
-	// No ASan interceptors are invoked before this point. ASan is normally initialized via the malloc interceptor:
-	// _dyld_initializer() -> tlv_load_notification -> wrap_malloc -> ASanInitInternal
-
 	_dyld_initializer();
 	_libSystem_ktrace_init_func(DYLD);
+
+#if TARGET_OS_OSX
+	__pthread_late_init(envp, apple, vars);
+#endif
 
 	libdispatch_init();
 	_libSystem_ktrace_init_func(LIBDISPATCH);
@@ -257,7 +243,7 @@ libSystem_initializer(int argc,
 	_libxpc_initializer();
 	_libSystem_ktrace_init_func(LIBXPC);
 
-#if CURRENT_VARIANT_asan
+#if SUPPORT_ASAN
 	setenv("DT_BYPASS_LEAKS_CHECK", "1", 1);
 #endif
 #endif // !TARGET_OS_DRIVERKIT
@@ -281,7 +267,17 @@ libSystem_initializer(int argc,
 	_libSystem_ktrace_init_func(DARWIN);
 #endif // !TARGET_OS_DRIVERKIT
 
-	__stack_logging_early_finished(&malloc_funcs);
+	const struct _malloc_late_init mli = {
+		.version = 1,
+#if !TARGET_OS_DRIVERKIT
+		.dlopen = dlopen,
+		.dlsym = dlsym,
+		// this must come after _libxpc_initializer()
+		.internal_diagnostics = os_variant_has_internal_diagnostics("com.apple.libsystem"),
+#endif
+	};
+
+	__malloc_late_init(&mli);
 
 #if !TARGET_OS_IPHONE
 	/* <rdar://problem/22139800> - Preserve the old behavior of apple[] for
@@ -294,6 +290,37 @@ libSystem_initializer(int argc,
 		}
 	}
 #endif
+
+#if TARGET_OS_OSX && !defined(__i386__)
+	bool enable_system_version_compat = false;
+	bool enable_ios_version_compat = false;
+	char *system_version_compat_override = getenv("SYSTEM_VERSION_COMPAT");
+	if (system_version_compat_override != NULL) {
+		long override = strtol(system_version_compat_override, NULL, 0);
+		if (override == 1) {
+			enable_system_version_compat = true;
+		} else if (override == 2) {
+			enable_ios_version_compat = true;
+		}
+	} else if (dyld_get_active_platform() == PLATFORM_MACCATALYST) {
+		if (!dyld_program_sdk_at_least(dyld_platform_version_iOS_14_0)) {
+			enable_system_version_compat = true;
+		}
+	} else if (dyld_get_active_platform() == PLATFORM_IOS) {
+		enable_ios_version_compat = true;
+	} else if (!dyld_program_sdk_at_least(dyld_platform_version_macOS_10_16)) {
+		enable_system_version_compat = true;
+	}
+
+	if (enable_system_version_compat || enable_ios_version_compat) {
+		struct _libkernel_late_init_config config = {
+			.version = 2,
+			.enable_system_version_compat = enable_system_version_compat,
+			.enable_ios_version_compat = enable_ios_version_compat,
+		};
+		__libkernel_init_late(&config);
+	}
+#endif // TARGET_OS_OSX && !defined(__i386__)
 
 	_libSystem_ktrace0(ARIADNE_LIFECYCLE_libsystem_init | DBG_FUNC_END);
 
@@ -342,10 +369,6 @@ libSystem_atfork_parent(void)
 	_libSC_info_fork_parent();
 #endif // !TARGET_OS_DRIVERKIT
 
-#ifdef DARLING
-	_mach_fork_parent();
-#endif
-
 	// second call client parent handlers registered with pthread_atfork()
 	_pthread_atfork_parent_handlers();
 }
@@ -384,24 +407,105 @@ libSystem_atfork_child(void)
 #endif
 }
 
-#if CURRENT_VARIANT_asan
-#define DEFAULT_ASAN_OPTIONS "color=never" \
-	":handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0" \
-	":external_symbolizer_path=" \
-	":log_path=stderr:log_exe_name=0" \
-	":halt_on_error=0" \
-	":print_module_map=2" \
-	":start_deactivated=1" \
-	":detect_odr_violation=0"
+#if SUPPORT_ASAN
+
+// Prevents use of coloring terminal signals in report. These
+// hinder readability when writing to files or the system log.
+#define ASAN_OPT_NO_COLOR "color=never"
+
+// Disables ASan's signal handlers. It's better to let the system catch
+// these kinds of crashes.
+#define ASAN_OPT_NO_SIGNAL_HANDLERS ":handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0"
+
+// Disables using the out-of-process symbolizer (atos) but still allows
+// in-process symbolization via `dladdr()`. This gives useful function names
+// (unless they are redacted) which can be helpful in the event we can't
+// symbolize offline. Out-of-process symbolization isn't useful because
+// the dSYMs are usually not present on the device.
+#define ASAN_OPT_NO_OOP_SYMBOLIZER ":external_symbolizer_path="
+
+// Don't try to log to a file. It's difficult to find a location for the file
+// that is writable so just write to stderr.
+#define ASAN_OPT_FILE_LOG ":log_path=stderr:log_exe_name=0"
+
+// Print the module map when finding an issue. This is necessary for offline
+// symbolication.
+#define ASAN_OPT_MODULE_MAP ":print_module_map=2"
+
+// Disable ODR violation checking.
+// <rdar://problem/71021707> Investigate enabling ODR checking for ASan in BATS and in the `_asan` variant
+#define ASAN_OPT_NO_ODR_VIOLATION ":detect_odr_violation=0"
+
+// Start ASan in deactivated mode. This reduces memory overhead until
+// instrumented code is loaded. This prevents catching bugs if no instrumented
+// code is loaded.
+#define ASAN_OPT_START_DEACTIVATED ":start_deactivated=1"
+
+// Do not crash when an error is found. This always works for errors caught via
+// ASan's interceptors. This won't work for errors caught in ASan
+// instrumentation unless the code is compiled with
+// `-fsanitize-recover=address`.  If this option is being used then the ASan
+// reports can only be found by looking at the system log.
+#define ASAN_OPT_NO_HALT_ON_ERROR ":halt_on_error=0"
+
+// Crash when an error is found.
+#define ASAN_OPT_HALT_ON_ERROR ":halt_on_error=1"
+
+// ASan options common to all supported variants
+#define COMMON_ASAN_OPTIONS \
+  ASAN_OPT_NO_COLOR \
+  ASAN_OPT_NO_SIGNAL_HANDLERS \
+  ASAN_OPT_NO_OOP_SYMBOLIZER \
+  ASAN_OPT_FILE_LOG \
+  ASAN_OPT_MODULE_MAP \
+  ASAN_OPT_NO_ODR_VIOLATION
+
+#if defined(CURRENT_VARIANT_normal) || defined(CURRENT_VARIANT_debug) || defined (CURRENT_VARIANT_no_asan)
+
+// In the normal variant ASan will be running in all userspace processes ("whole userspace ASan").
+// This mode exists to support "ASan in BATS".
+//
+// Supporting ASan in the debug variant preserves existing behavior.
+//
+// The no_asan variant does not load the ASan runtime. However, the runtime
+// might still be loaded if a program or its dependencies are instrumented.
+// There is nothing we can do to prevent this so we should set the appropriate
+// ASan options (same as normal variant) if it does happen. We try to do this
+// here but this currently doesn't work due to rdar://problem/72212914.
+//
+// These variants use the following extra options:
+//
+// ASAN_OPT_NO_HALT_ON_ERROR - Try to avoid crash loops and increase the
+//                             chances of booting successfully.
+// ASAN_OPT_START_DEACTIVATED - Try to reduce memory overhead.
+
+# define DEFAULT_ASAN_OPTIONS \
+  COMMON_ASAN_OPTIONS \
+  ASAN_OPT_START_DEACTIVATED \
+  ASAN_OPT_NO_HALT_ON_ERROR
+
+#elif defined(CURRENT_VARIANT_asan)
+
+// The `_asan` variant is used to support running proceses with
+// `DYLD_IMAGE_SUFFIX=_asan`. This mode is typically used to target select parts of the OS.
+//
+// It uses the following extra options:
+//
+// ASAN_OPT_HALT_ON_ERROR - Crashing is better than just writing the error to the system log
+//                          if the system can handle this. This workflow is
+//                          more tolerant (e.g. `launchctl debug`) to crashing
+//                          than the "whole userspace ASan" workflow.
+
+# define DEFAULT_ASAN_OPTIONS \
+  COMMON_ASAN_OPTIONS \
+  ASAN_OPT_HALT_ON_ERROR
+
+#else
+# error Supporting ASan is not supported in the current variant
+#endif
+
 char dynamic_asan_opts[1024] = {0};
 const char *__asan_default_options(void) {
-	char executable_path[4096] = {0};
-	uint32_t size = sizeof(executable_path);
-	const char *process_name = "";
-	if (_NSGetExecutablePath(executable_path, &size) == 0) {
-		process_name = strrchr(executable_path, '/') + 1;
-	}
-
 	int fd = open("/System/Library/Preferences/com.apple.asan.options", O_RDONLY);
 	if (fd != -1) {
 		ssize_t remaining_size = sizeof(dynamic_asan_opts) - 1;
@@ -420,6 +524,20 @@ const char *__asan_default_options(void) {
 
 	return DEFAULT_ASAN_OPTIONS;
 }
+
+#undef ASAN_OPT_NO_COLOR
+#undef ASAN_OPT_NO_SIGNAL_HANDLERS
+#undef ASAN_OPT_NO_OOP_SYMBOLIZER
+#undef ASAN_OPT_FILE_LOG
+#undef ASAN_OPT_MODULE_MAP
+#undef ASAN_OPT_NO_ODR_VIOLATION
+#undef ASAN_OPT_START_DEACTIVATED
+#undef ASAN_OPT_NO_HALT_ON_ERROR
+#undef ASAN_OPT_HALT_ON_ERROR
+
+#undef COMMON_ASAN_OPTIONS
+#undef DEFAULT_ASAN_OPTIONS
+
 #endif
 
 /*
