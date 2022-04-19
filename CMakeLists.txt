@@ -65,7 +65,7 @@ libsystem_reexport(
 	libdispatch_shared src/external/libdispatch/libdispatch.dylib
 	launch src/launchd/liblaunch/liblaunch.dylib
 	compiler_rt src/external/compiler-rt/lib/builtins/libcompiler_rt.dylib
-	system_dyld src/dyld/libdyld.dylib
+	system_dyld src/external/dyld/libdyld.dylib
 	macho src/external/cctools/libmacho/libmacho.dylib
 	system_pthread src/external/libpthread/src/libsystem_pthread.dylib
 	platform src/external/libplatform/libsystem_platform.dylib
