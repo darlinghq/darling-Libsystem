@@ -67,7 +67,7 @@ libsystem_reexport(
 	system_trace src/external/libtrace/libsystem_trace.dylib
 	keymgr src/keymgr/libkeymgr.dylib
 	system_m src/libm/libsystem_m.dylib
-	system_info src/libinfo/libsystem_info.dylib
+	system_info src/external/Libinfo/libsystem_info.dylib
 	system_notify src/external/libnotify/libsystem_notify.dylib
 	libdispatch_shared src/external/libdispatch/libdispatch.dylib
 	launch src/launchd/liblaunch/liblaunch.dylib
