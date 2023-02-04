@@ -87,6 +87,7 @@ libsystem_reexport(
 	unwind src/libunwind/libunwind.dylib
 	system_darwin src/external/libc/libdarwin/libsystem_darwin.dylib
 	libcache src/libcache/libcache.dylib
+	system_configuration src/external/configd/libsystem_configuration.dylib
 )
 
 add_dependencies(system system_malloc system_m)
