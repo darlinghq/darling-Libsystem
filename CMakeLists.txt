@@ -84,7 +84,7 @@ libsystem_reexport(
 	commonCrypto src/external/commoncrypto/libcommonCrypto.dylib
 	system_dnssd src/lib/system/dnssd/libsystem_dnssd.dylib
 	system_networkextension src/networkextension/libsystem_networkextension.dylib
-	unwind src/libunwind/libunwind.dylib
+	unwind src/external/libunwind/libunwind.dylib
 	system_darwin src/external/libc/libdarwin/libsystem_darwin.dylib
 	libcache src/libcache/libcache.dylib
 	system_configuration src/external/configd/libsystem_configuration.dylib
