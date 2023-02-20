@@ -57,7 +57,7 @@ endfunction(libsystem_reexport)
 libsystem_reexport(
 	system_sandbox src/sandbox/libsystem_sandbox.dylib
 	system_quarantine src/quarantine/libquarantine.dylib
-	removefile src/libremovefile/libremovefile.dylib
+	removefile src/external/removefile/libremovefile.dylib
 	system_copyfile src/external/copyfile/libcopyfile.dylib
 	system_coreservices src/libsystem_coreservices/libsystem_coreservices.dylib
 	system_coretls src/external/coretls/libsystem_coretls.dylib
