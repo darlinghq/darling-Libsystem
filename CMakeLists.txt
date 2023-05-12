@@ -20,7 +20,7 @@ add_definitions(
 
 set(libsystem_sources
 	init.c
-	dummy.c
+	darling/src/dummy.c
 	CompatibilityHacks.c
 )
 
