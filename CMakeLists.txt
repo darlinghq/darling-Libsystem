@@ -63,7 +63,7 @@ libsystem_reexport(
 	system_coretls src/external/coretls/libsystem_coretls.dylib
 	system_malloc src/external/libmalloc/libsystem_malloc.dylib
 	system_c src/external/libc/libsystem_c.dylib
-	system_kernel src/kernel/libsystem_kernel.dylib
+	system_kernel src/external/xnu/darling/src/libsystem_kernel/libsystem_kernel.dylib
 	system_trace src/external/libtrace/libsystem_trace.dylib
 	keymgr src/external/keymgr/libkeymgr.dylib
 	system_m src/libm/libsystem_m.dylib
