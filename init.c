@@ -111,10 +111,20 @@ extern void _libcoreservices_fork_child(void);
 extern char *_dirhelper(int, char *, size_t);
 #endif
 
+#ifdef DARLING
+extern void kqueue_atfork(void);
+#endif
+
 // advance decls for below;
 void libSystem_atfork_prepare(void);
 void libSystem_atfork_parent(void);
 void libSystem_atfork_child(void);
+
+#ifdef DARLING
+void libSystem_posix_spawn_prepare(void);
+void libSystem_posix_spawn_parent(void);
+void libSystem_posix_spawn_child(void);
+#endif
 
 #if SUPPORT_ASAN
 const char *__asan_default_options(void);
@@ -194,6 +204,9 @@ libSystem_initializer(int argc,
 		.pthread_current_stack_contains_np = pthread_current_stack_contains_np,
 #ifdef DARLING
 		.dyld_func_lookup = _dyld_func_lookup,
+		.posix_spawn_prepare = libSystem_posix_spawn_prepare,
+		.posix_spawn_parent = libSystem_posix_spawn_parent,
+		.posix_spawn_child = libSystem_posix_spawn_child,
 #endif
 	};
 
@@ -416,10 +429,77 @@ libSystem_atfork_child(void)
 	_pthread_atfork_child_handlers();
 
 #ifdef DARLING
-	extern void kqueue_atfork(void);
 	kqueue_atfork();
 #endif
 }
+
+#ifdef DARLING
+/*
+ * libSystem_posix_spawn_{prepare,parent,child}() are called by libsystem_kernel during posix_spawn(2).
+ *
+ * These are identical to libSystem_atfork_{prepare,parent,child}(), except they don't call
+ * pthread_atfork handlers.
+ */
+void libSystem_posix_spawn_prepare(void) {
+	// call hardwired fork prepare handlers for Libsystem components
+	// in the _reverse_ order of library initalization above
+#if !TARGET_OS_DRIVERKIT
+	_libSC_info_fork_prepare();
+	xpc_atfork_prepare();
+#endif // !TARGET_OS_DRIVERKIT
+	dispatch_atfork_prepare();
+	_dyld_atfork_prepare();
+	cc_atfork_prepare();
+	_malloc_fork_prepare();
+	_pthread_atfork_prepare();
+};
+
+void libSystem_posix_spawn_parent(void) {
+	// call hardwired fork parent handlers for Libsystem components
+	// in the order of library initalization above
+	_pthread_atfork_parent();
+	_malloc_fork_parent();
+	cc_atfork_parent();
+	_dyld_atfork_parent();
+	dispatch_atfork_parent();
+#if !TARGET_OS_DRIVERKIT
+	xpc_atfork_parent();
+	_libSC_info_fork_parent();
+#endif // !TARGET_OS_DRIVERKIT
+
+#ifdef DARLING
+	_mach_fork_parent();
+#endif
+};
+
+void libSystem_posix_spawn_child(void) {
+	// call hardwired fork child handlers for Libsystem components
+	// in the order of library initalization above
+	_mach_fork_child();
+	_pthread_atfork_child();
+	_malloc_fork_child();
+	cc_atfork_child();
+	_libc_fork_child(); // _arc4_fork_child calls malloc
+	_dyld_fork_child();
+	dispatch_atfork_child();
+#if !TARGET_OS_DRIVERKIT
+#if defined(HAVE_SYSTEM_CORESERVICES)
+	_libcoreservices_fork_child();
+#endif
+	_asl_fork_child();
+	_notify_fork_child();
+	xpc_atfork_child();
+#endif // !TARGET_OS_DRIVERKIT
+	_libtrace_fork_child();
+#if !TARGET_OS_DRIVERKIT
+	_libSC_info_fork_child();
+#endif // !TARGET_OS_DRIVERKIT
+
+#ifdef DARLING
+	kqueue_atfork();
+#endif
+};
+#endif
 
 #if SUPPORT_ASAN
 
