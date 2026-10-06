@@ -429,12 +429,14 @@ libSystem_atfork_child(void)
 	_libSC_info_fork_child();
 #endif // !TARGET_OS_DRIVERKIT
 
-	// second call client parent handlers registered with pthread_atfork()
-	_pthread_atfork_child_handlers();
-
 #ifdef DARLING
+	// Before the client's handlers: they may close descriptors (libuv's does), close() goes through the
+	// kqueue layer, and its locks may have been held at fork time by threads that do not exist here.
 	kqueue_atfork();
 #endif
+
+	// second call client parent handlers registered with pthread_atfork()
+	_pthread_atfork_child_handlers();
 }
 
 #ifdef DARLING
