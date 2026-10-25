@@ -34,9 +34,7 @@ set(DYLIB_CURRENT_VERSION "1281.0.0")
 add_circular(system FAT
 	SOURCES
 		${libsystem_sources}
-	OBJECTS
-		$<TARGET_OBJECTS:kqueue>
-
+	# libkqueue state is owned by system_kernel, including close/fork hooks.
 	SIBLINGS
 
 	system_malloc
