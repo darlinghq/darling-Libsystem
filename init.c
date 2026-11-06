@@ -113,6 +113,8 @@ extern char *_dirhelper(int, char *, size_t);
 
 #ifdef DARLING
 extern void kqueue_atfork(void);
+extern int kqueue_close(int kqfd);
+extern void kqueue_closed_fd(int fd);
 #endif
 
 // advance decls for below;
@@ -207,6 +209,8 @@ libSystem_initializer(int argc,
 		.posix_spawn_prepare = libSystem_posix_spawn_prepare,
 		.posix_spawn_parent = libSystem_posix_spawn_parent,
 		.posix_spawn_child = libSystem_posix_spawn_child,
+		.kqueue_closed_fd = kqueue_closed_fd,
+		.kqueue_close = kqueue_close,
 #endif
 	};
 
@@ -425,12 +429,14 @@ libSystem_atfork_child(void)
 	_libSC_info_fork_child();
 #endif // !TARGET_OS_DRIVERKIT
 
-	// second call client parent handlers registered with pthread_atfork()
-	_pthread_atfork_child_handlers();
-
 #ifdef DARLING
+	// Before the client's handlers: they may close descriptors (libuv's does), close() goes through the
+	// kqueue layer, and its locks may have been held at fork time by threads that do not exist here.
 	kqueue_atfork();
 #endif
+
+	// second call client parent handlers registered with pthread_atfork()
+	_pthread_atfork_child_handlers();
 }
 
 #ifdef DARLING
@@ -447,7 +453,9 @@ void libSystem_posix_spawn_prepare(void) {
 	_libSC_info_fork_prepare();
 	xpc_atfork_prepare();
 #endif // !TARGET_OS_DRIVERKIT
-	dispatch_atfork_prepare();
+	// dispatch_atfork_prepare is omitted during posix_spawn because posix_spawn
+	// in macOS is a direct kernel spawn, not a userspace fork; freezing the
+	// dispatch queues from a multithreaded process (like cmake/libuv) deadlocks.
 	_dyld_atfork_prepare();
 	cc_atfork_prepare();
 	_malloc_fork_prepare();
@@ -461,7 +469,7 @@ void libSystem_posix_spawn_parent(void) {
 	_malloc_fork_parent();
 	cc_atfork_parent();
 	_dyld_atfork_parent();
-	dispatch_atfork_parent();
+	// dispatch_atfork_parent omitted to match prepare
 #if !TARGET_OS_DRIVERKIT
 	xpc_atfork_parent();
 	_libSC_info_fork_parent();
@@ -481,7 +489,7 @@ void libSystem_posix_spawn_child(void) {
 	cc_atfork_child();
 	_libc_fork_child(); // _arc4_fork_child calls malloc
 	_dyld_fork_child();
-	dispatch_atfork_child();
+	// dispatch_atfork_child omitted to match prepare/parent in posix_spawn
 #if !TARGET_OS_DRIVERKIT
 #if defined(HAVE_SYSTEM_CORESERVICES)
 	_libcoreservices_fork_child();
