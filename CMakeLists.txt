@@ -59,6 +59,7 @@ libsystem_reexport(
 	removefile src/external/removefile/libremovefile.dylib
 	system_copyfile src/external/copyfile/libcopyfile.dylib
 	system_coreservices src/libsystem_coreservices/libsystem_coreservices.dylib
+	system_featureflags src/libsystem_featureflags/libsystem_featureflags.dylib
 	system_coretls src/external/coretls/libsystem_coretls.dylib
 	system_malloc src/external/libmalloc/libsystem_malloc.dylib
 	system_c src/external/libc/libsystem_c.dylib
